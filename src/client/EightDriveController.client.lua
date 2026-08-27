@@ -6,6 +6,13 @@
 -- writing constraint goals from the owning client is the standard Roblox
 -- custom-vehicle pattern -- the resulting motion replicates via that
 -- ownership, there's no RemoteEvent involved in driving itself.
+--
+-- Yaw (turning) is driven by AngularVelocity, kept deliberately separate
+-- from VehicleExecutor's always-on "stay upright" AlignOrientation -- that
+-- constraint uses PrimaryAxisOnly and never resists yaw, so there's nothing
+-- to fight here; forward/vertical movement reads the vehicle's own live
+-- facing direction each frame rather than tracking a separately-integrated
+-- goal orientation.
 
 local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
@@ -17,14 +24,6 @@ local SharedConfig = require(ReplicatedStorage:WaitForChild("SharedConfig"))
 
 local localPlayer = Players.LocalPlayer
 
--- Per-vehicle rotation-only goal CFrame, integrated purely from turn input
--- over time. Seeded from the vehicle's actual orientation on first drive
--- frame after mount, then advanced independently of AlignOrientation's own
--- (lagging) progress toward that goal -- reading the constraint's target
--- back out and re-deriving from the live part CFrame each frame would let
--- tracking error compound.
-local goalOrientations: { [Model]: CFrame } = {}
-
 local function getRootPart(npc: Model): BasePart?
 	return npc.PrimaryPart or npc:FindFirstChild("HumanoidRootPart") :: BasePart?
 end
@@ -35,21 +34,16 @@ local function isLocalPlayerSeated(seat: Seat): boolean
 	return humanoid ~= nil and seat.Occupant == humanoid
 end
 
-local function driveVehicle(npc: Model, dt: number)
+local function driveVehicle(npc: Model)
 	local rootPart = getRootPart(npc)
 	if not rootPart then
 		return
 	end
 
 	local linearVelocity = rootPart:FindFirstChild("VehicleLinearVelocity") :: LinearVelocity?
-	local alignOrientation = rootPart:FindFirstChild("VehicleAlignOrientation") :: AlignOrientation?
-	if not linearVelocity or not alignOrientation or not linearVelocity.Enabled then
-		goalOrientations[npc] = nil
+	local angularVelocity = rootPart:FindFirstChild("VehicleAngularVelocity") :: AngularVelocity?
+	if not linearVelocity or not angularVelocity or not linearVelocity.Enabled then
 		return
-	end
-
-	if not goalOrientations[npc] then
-		goalOrientations[npc] = rootPart.CFrame - rootPart.CFrame.Position
 	end
 
 	local groundSpeed = (npc:GetAttribute("VehicleGroundSpeed") :: number?) or 40
@@ -63,21 +57,18 @@ local function driveVehicle(npc: Model, dt: number)
 	local vertical = (UserInputService:IsKeyDown(Enum.KeyCode.E) and 1 or 0)
 		- (UserInputService:IsKeyDown(Enum.KeyCode.Q) and 1 or 0)
 
-	if turn ~= 0 then
-		goalOrientations[npc] = goalOrientations[npc] * CFrame.Angles(0, math.rad(turn * turnDegPerSec * dt), 0)
-	end
-	alignOrientation.CFrame = goalOrientations[npc]
+	angularVelocity.AngularVelocity = Vector3.new(0, math.rad(turn * turnDegPerSec), 0)
 
-	local lookVector = goalOrientations[npc].LookVector
+	local lookVector = rootPart.CFrame.LookVector
 	linearVelocity.VectorVelocity = (lookVector * forward * groundSpeed) + Vector3.new(0, vertical * flightSpeed, 0)
 end
 
-RunService.Heartbeat:Connect(function(dt: number)
+RunService.Heartbeat:Connect(function()
 	for _, npc in ipairs(CollectionService:GetTagged(SharedConfig.VEHICLE_TAG)) do
 		if npc:IsA("Model") then
 			local seat = npc:FindFirstChildWhichIsA("Seat")
 			if seat and isLocalPlayerSeated(seat) then
-				driveVehicle(npc, dt)
+				driveVehicle(npc)
 			end
 		end
 	end

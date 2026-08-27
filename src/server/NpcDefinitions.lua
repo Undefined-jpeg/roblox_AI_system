@@ -19,6 +19,7 @@ export type VehicleDef = {
 	turnDegPerSec: number,
 	maxFlightHeightStuds: number,
 	rideApproachStuds: number,
+	hoverHeightStuds: number,
 }
 
 export type NpcDef = {
@@ -51,6 +52,7 @@ local DEFINITIONS: { [string]: NpcDef } = {
 			turnDegPerSec = 90,
 			maxFlightHeightStuds = 120,
 			rideApproachStuds = 8,
+			hoverHeightStuds = 3,
 		},
 	},
 }

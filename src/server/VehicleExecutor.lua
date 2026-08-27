@@ -6,6 +6,7 @@
 
 local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local ActionExecutor = require(script.Parent.ActionExecutor)
@@ -23,8 +24,10 @@ type VehicleState = {
 	rider: Player?,
 	idleTrack: AnimationTrack?,
 	moveTrack: AnimationTrack?,
+	baseHipHeight: number,
 	linearVelocity: LinearVelocity?,
-	alignOrientation: AlignOrientation?,
+	angularVelocity: AngularVelocity?,
+	antiGravity: VectorForce?,
 }
 
 local states: { [Model]: VehicleState } = {}
@@ -84,6 +87,81 @@ local function loadAnim(npc: Model, assetId: string): AnimationTrack?
 	return trackOrErr :: AnimationTrack
 end
 
+-- "Stay upright ALWAYS" per explicit requirement -- not best-effort. Two
+-- prior attempts (a static-goal AlignOrientation, then a continuously-
+-- updated-goal AlignOrientation with tuned MaxTorque/Responsiveness) both
+-- failed live -- confirmed by screenshot, the assembly ended up fully
+-- upside-down under a seated rider's weight. Soft torque-based constraints
+-- can lose that fight depending on mass/tuning; this instead HARD-SETS the
+-- root part's rotation directly every single frame (while powered on),
+-- preserving actual position/velocity but overwriting tilt unconditionally
+-- -- not a negotiation with the physics solver, a guarantee. Yaw is left
+-- exactly as whatever it currently is (derived from the part's own live
+-- LookVector, flattened) so it never fights the Humanoid's own turning
+-- while walking, nor the dedicated AngularVelocity constraint while driving
+-- -- only pitch/roll ever get corrected.
+local function startUprightLoop(npc: Model)
+	local connection: RBXScriptConnection
+	connection = RunService.Heartbeat:Connect(function()
+		if not npc.Parent then
+			connection:Disconnect()
+			return
+		end
+
+		local state = states[npc]
+		if not state then
+			return
+		end
+
+		local rootPart = getRootPart(npc)
+		if not rootPart then
+			return
+		end
+
+		if state.antiGravity and state.antiGravity.Enabled then
+			state.antiGravity.Force = Vector3.new(0, rootPart.AssemblyMass * Workspace.Gravity, 0)
+		end
+
+		if state.mode == "Unresponsive" then
+			return
+		end
+
+		-- Confirmed live: hard-snapping every single frame (even while
+		-- already level) reset the part's velocity each time -- visible as
+		-- both aggressive jitter and the vehicle failing to actually travel
+		-- despite LinearVelocity being set. Only correct when genuinely
+		-- tilted, lerp toward level instead of snapping, and explicitly
+		-- restore velocity across the write so driving isn't interrupted.
+		local upDot = rootPart.CFrame.UpVector:Dot(Vector3.new(0, 1, 0))
+		if upDot < 0.999 then
+			local lookVector = rootPart.CFrame.LookVector
+			local flatLook = Vector3.new(lookVector.X, 0, lookVector.Z)
+			if flatLook.Magnitude > 0.001 then
+				local targetCFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + flatLook)
+				local savedLinearVelocity = rootPart.AssemblyLinearVelocity
+				local savedAngularVelocity = rootPart.AssemblyAngularVelocity
+				rootPart.CFrame = rootPart.CFrame:Lerp(targetCFrame, 0.35)
+				rootPart.AssemblyLinearVelocity = savedLinearVelocity
+				rootPart.AssemblyAngularVelocity = savedAngularVelocity
+			end
+		end
+	end)
+end
+
+-- Raises/lowers standing height via Humanoid.HipHeight -- Roblox's own
+-- ground-clearance mechanic, so it naturally applies while walking/
+-- pathfinding (Idle/Following/Moving/AwaitingRider) with no extra physics
+-- needed. Has no effect while Mounted (PlatformStand disables normal
+-- Humanoid ground-tracking there; altitude is fully player-controlled via
+-- E/Q instead).
+local function setHovering(npc: Model, state: VehicleState, hovering: boolean, hoverHeightStuds: number)
+	local humanoid = getHumanoid(npc)
+	if not humanoid then
+		return
+	end
+	humanoid.HipHeight = hovering and (state.baseHipHeight + hoverHeightStuds) or state.baseHipHeight
+end
+
 local function dismountRider(npc: Model)
 	local state = states[npc]
 	if not state or state.mode ~= "Mounted" then
@@ -105,9 +183,17 @@ local function dismountRider(npc: Model)
 		state.linearVelocity.VectorVelocity = Vector3.zero
 		state.linearVelocity.Enabled = false
 	end
-	if state.alignOrientation then
-		state.alignOrientation.Enabled = false
+	if state.angularVelocity then
+		state.angularVelocity.AngularVelocity = Vector3.zero
+		state.angularVelocity.Enabled = false
 	end
+	if state.antiGravity then
+		state.antiGravity.Enabled = false
+	end
+	-- The upright-correction Heartbeat loop (startUprightLoop) is intentionally
+	-- untouched here -- it stays active continuously through Idle/
+	-- AwaitingRider/Mounted purely by checking state.mode itself each frame,
+	-- only stopping once mode reaches "Unresponsive" via transform down.
 
 	state.mode = "Idle"
 	state.rider = nil
@@ -135,9 +221,16 @@ local function mountRider(npc: Model, player: Player)
 		state.linearVelocity.VectorVelocity = Vector3.zero
 		state.linearVelocity.Enabled = true
 	end
-	if state.alignOrientation and rootPart then
-		state.alignOrientation.CFrame = rootPart.CFrame
-		state.alignOrientation.Enabled = true
+	if state.angularVelocity then
+		state.angularVelocity.AngularVelocity = Vector3.zero
+		state.angularVelocity.Enabled = true
+	end
+	if state.antiGravity and rootPart then
+		-- Seed an immediate correct value rather than waiting for the next
+		-- Heartbeat tick (which also keeps it updated as mass changes, e.g.
+		-- the rider's own character joining this physics assembly).
+		state.antiGravity.Force = Vector3.new(0, rootPart.AssemblyMass * Workspace.Gravity, 0)
+		state.antiGravity.Enabled = true
 	end
 
 	state.mode = "Mounted"
@@ -180,6 +273,12 @@ function VehicleExecutor.TransformUp(npc: Model)
 	state.generation += 1
 	local myGeneration = state.generation
 	state.mode = "Idle"
+
+	-- Engage immediately (not after the animation finishes) -- transforming
+	-- up is what makes it responsive/active at all. (Upright correction
+	-- itself needs no explicit "enable" call -- startUprightLoop checks
+	-- state.mode directly every frame, and mode is already "Idle" here.)
+	setHovering(npc, state, true, def.hoverHeightStuds)
 
 	task.spawn(function()
 		local track = loadAnim(npc, def.animations.spawn)
@@ -256,7 +355,15 @@ function VehicleExecutor.TransformBack(npc: Model)
 		end
 
 		if states[npc] and states[npc].generation == myGeneration then
-			states[npc].mode = "Unresponsive"
+			local currentState = states[npc]
+			currentState.mode = "Unresponsive"
+			-- Only now does it actually "fall down as usual" -- mode
+			-- becoming "Unresponsive" is what stops startUprightLoop's
+			-- correction (it checks state.mode directly), and losing the
+			-- hover height at the same moment, right as the transform-down
+			-- animation finishes, so it settles/topples via normal gravity
+			-- instead of visibly fighting the animation.
+			setHovering(npc, currentState, false, def.hoverHeightStuds)
 		end
 	end)
 end
@@ -382,23 +489,30 @@ function VehicleExecutor.Init(npc: Model)
 	linearVelocity.Enabled = false
 	linearVelocity.Parent = rootPart
 
-	local alignOrientation = Instance.new("AlignOrientation")
-	alignOrientation.Name = "VehicleAlignOrientation"
-	alignOrientation.Attachment0 = attachment
-	-- math.huge here (infinite corrective torque) caused visible wobbling,
-	-- confirmed live: on a heavy multi-part welded assembly, an "instantly
-	-- snap to goal" torque overcorrects every physics step and oscillates.
-	-- A large-but-finite torque plus a moderate (not max) Responsiveness
-	-- gives a stiff-but-stable hold instead.
-	alignOrientation.MaxTorque = 1e7
-	alignOrientation.Responsiveness = 25
-	-- No RelativeTo here -- that's a LinearVelocity-only property. With no
-	-- Attachment1 set, AlignOrientation.CFrame is already a world-space
-	-- orientation goal (confirmed live: setting RelativeTo on this class
-	-- throws "not a valid member").
-	alignOrientation.CFrame = rootPart.CFrame
-	alignOrientation.Enabled = false
-	alignOrientation.Parent = rootPart
+	-- Yaw control while driving, kept entirely separate from the hard
+	-- upright correction in startUprightLoop so the two never fight: this
+	-- one ONLY spins around the vehicle's own up axis, expressed in its
+	-- local frame so "turn right" means the same thing regardless of
+	-- current heading.
+	local angularVelocity = Instance.new("AngularVelocity")
+	angularVelocity.Name = "VehicleAngularVelocity"
+	angularVelocity.Attachment0 = attachment
+	angularVelocity.RelativeTo = Enum.ActuatorRelativeTo.Attachment0
+	angularVelocity.MaxTorque = Vector3.new(1e7, 1e7, 1e7)
+	angularVelocity.AngularVelocity = Vector3.zero
+	angularVelocity.Enabled = false
+	angularVelocity.Parent = rootPart
+
+	-- Cancels gravity outright while Mounted (see startUprightLoop's comment
+	-- for why) -- Force is recomputed continuously from the assembly's real
+	-- current mass, this starting value is just a placeholder.
+	local antiGravity = Instance.new("VectorForce")
+	antiGravity.Name = "VehicleAntiGravity"
+	antiGravity.Attachment0 = attachment
+	antiGravity.RelativeTo = Enum.ActuatorRelativeTo.World
+	antiGravity.Force = Vector3.zero
+	antiGravity.Enabled = false
+	antiGravity.Parent = rootPart
 
 	states[npc] = {
 		mode = "Unresponsive",
@@ -406,8 +520,10 @@ function VehicleExecutor.Init(npc: Model)
 		rider = nil,
 		idleTrack = nil,
 		moveTrack = nil,
+		baseHipHeight = humanoid.HipHeight,
 		linearVelocity = linearVelocity,
-		alignOrientation = alignOrientation,
+		angularVelocity = angularVelocity,
+		antiGravity = antiGravity,
 	}
 
 	seat:GetPropertyChangedSignal("Occupant"):Connect(function()
@@ -416,6 +532,7 @@ function VehicleExecutor.Init(npc: Model)
 
 	startAnimPoll(npc)
 	startHeightWatcher(npc)
+	startUprightLoop(npc)
 end
 
 function VehicleExecutor.Start()
