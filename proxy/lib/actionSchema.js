@@ -12,10 +12,22 @@
 // There is deliberately NO "go to this coordinate" action here — moving to
 // a specific point in the world is handled entirely by the player clicking
 // a location in-game (see src/client/NpcMoveUI.client.lua), never by
-// trusting LLM-generated coordinates. Keep ACTION_NAMES/EMOTE_NAMES in sync
-// with src/server/ActionConfig.lua.
+// trusting LLM-generated coordinates. `move_to` below follows the same
+// rule: it only prompts a specific player's client to enter that same
+// click-to-move flow, it never carries a location itself. Keep
+// ACTION_NAMES/EMOTE_NAMES in sync with src/server/ActionConfig.lua.
 
-const ACTION_NAMES = ["none", "follow_player", "play_emote", "stop", "wander"];
+const ACTION_NAMES = [
+  "none",
+  "follow_player",
+  "play_emote",
+  "stop",
+  "wander",
+  "ride",
+  "move_to",
+  "transform_up",
+  "transform_back",
+];
 const EMOTE_NAMES = ["wave", "dance", "point", "laugh"];
 
 const RESPONSE_TOOL_NAME = "npc_response";
@@ -41,8 +53,12 @@ const TOOLS = [
               "An action to take alongside your reply, or 'none' if you're just talking. " +
               "'follow_player' starts following the player who's talking to you. " +
               "'play_emote' plays a short emote (requires setting `emote`). " +
-              "'stop' stops following and stands still. " +
-              "'wander' walks off to a spot of your own choosing nearby.",
+              "'stop' stops following/moving and stands still. " +
+              "'wander' walks off to a spot of your own choosing nearby. " +
+              "'ride' walks toward the player and waits nearby so they can get on. " +
+              "'move_to' prompts the player to click where they want you to go. " +
+              "'transform_up' powers on / transforms up. " +
+              "'transform_back' transforms back down and powers off.",
           },
           emote: {
             type: "string",
@@ -88,8 +104,10 @@ function extractResponse(message) {
   const reply = typeof args.reply === "string" && args.reply.length > 0 ? args.reply : "...";
   const complied = args.complied !== false;
 
+  const NO_PARAM_ACTIONS = ["follow_player", "stop", "wander", "ride", "move_to", "transform_up", "transform_back"];
+
   let action = null;
-  if (args.action === "follow_player" || args.action === "stop" || args.action === "wander") {
+  if (NO_PARAM_ACTIONS.includes(args.action)) {
     action = { name: args.action, params: {} };
   } else if (args.action === "play_emote" && EMOTE_NAMES.includes(args.emote)) {
     action = { name: "play_emote", params: { emote: args.emote } };

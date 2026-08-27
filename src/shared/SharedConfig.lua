@@ -9,4 +9,9 @@ return {
 	-- How close the local player must be to a tagged NPC before the
 	-- "Move NPC Here" button appears.
 	MOVE_UI_RADIUS = 20,
+
+	-- CollectionService tag applied to rideable vehicle NPCs (e.g. Eight), in
+	-- addition to NPC_TAG. Drives the client's drive-input controller and the
+	-- server's vehicle-only systems (autonomy exclusion, mount handling).
+	VEHICLE_TAG = "AiVehicle",
 }

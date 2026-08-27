@@ -21,10 +21,15 @@ local ActionExecutor = require(script.Parent.ActionExecutor)
 local ChatMemory = require(script.Parent.ChatMemory)
 local Config = require(script.Parent.Config)
 local GroundUtil = require(script.Parent.GroundUtil)
+local NpcDefinitions = require(script.Parent.NpcDefinitions)
 local NpcPerception = require(script.Parent.NpcPerception)
 local OpenRouterClient = require(script.Parent.OpenRouterClient)
 local PassiveChatFilter = require(script.Parent.PassiveChatFilter)
+local VehicleChatController = require(script.Parent.VehicleChatController)
+local VehicleCommandFilter = require(script.Parent.VehicleCommandFilter)
+local VehicleExecutor = require(script.Parent.VehicleExecutor)
 local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
+local SharedConfig = require(ReplicatedStorage:WaitForChild("SharedConfig"))
 
 local NpcChatController = {}
 
@@ -86,7 +91,10 @@ local function findRespondingNpc(player: Player, message: string): Model?
 end
 
 -- Nearest tagged NPC within listenRadius, for passive overhearing (doesn't
--- need an @mention -- just proximity to whoever spoke).
+-- need an @mention -- just proximity to whoever spoke). Vehicle NPCs are
+-- deliberately excluded: they're command-driven, not background
+-- personalities, and shouldn't spend an LLM call reacting to chat nobody
+-- addressed to them.
 local function findNearestNpcWithin(player: Player, radiusStuds: number): Model?
 	local character = player.Character
 	local playerRoot = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
@@ -98,7 +106,7 @@ local function findNearestNpcWithin(player: Player, radiusStuds: number): Model?
 	local nearestDistance = math.huge
 
 	for _, npc in ipairs(CollectionService:GetTagged(Config.NPC_TAG)) do
-		if npc:IsA("Model") then
+		if npc:IsA("Model") and not npc:HasTag(SharedConfig.VEHICLE_TAG) then
 			local npcRoot = getNpcRootPart(npc)
 			if npcRoot then
 				local distance = (playerRoot.Position - npcRoot.Position).Magnitude
@@ -157,6 +165,14 @@ local function dispatchAction(
 	complied: boolean,
 	allowedActions: { [string]: boolean }
 )
+	-- Vehicle NPCs have a completely different command set (ride/transform/
+	-- move_to) and their own state machine (VehicleExecutor) -- route there
+	-- entirely instead of falling into the talking-NPC branches below.
+	if NpcDefinitions.Get(npc).vehicle then
+		VehicleChatController.Dispatch(npc, player, action, complied, allowedActions)
+		return
+	end
+
 	if complied == false then
 		return
 	end
@@ -225,14 +241,15 @@ local function handlePassiveOverhear(player: Player, message: string)
 	-- overheard reaction should never clobber a fresher, more important
 	-- state change.
 	local generationAtRequest = ActionExecutor.GetGeneration(npc)
+	local def = NpcDefinitions.Get(npc)
 
 	task.spawn(function()
-		local result = OpenRouterClient.RequestChat(message, {}, buildContext(npc, "passive_overheard"))
+		local result = OpenRouterClient.RequestChat(message, {}, buildContext(npc, "passive_overheard"), def.persona)
 		if ActionExecutor.GetGeneration(npc) ~= generationAtRequest then
 			return
 		end
 		displayNpcReply(npc, result.reply)
-		dispatchAction(npc, player, result.action, result.complied, ActionConfig.PASSIVE_ACTIONS)
+		dispatchAction(npc, player, result.action, result.complied, def.passiveActions)
 		-- No ChatMemory write: this wasn't a real conversation with `player`.
 	end)
 end
@@ -253,15 +270,29 @@ local function handleChatted(player: Player, message: string)
 	if last and (now - last) < Config.CHAT_COOLDOWN_SECONDS then
 		return
 	end
+
+	-- A powered-down vehicle should never spend an LLM call on ordinary
+	-- chat it can't act on anyway -- only a plausible "wake up" phrase
+	-- reaches the proxy at all, and even then with the whitelist narrowed
+	-- to transform_up only for this one call.
+	local def = NpcDefinitions.Get(npc)
+	local allowedActions = def.chatActions
+	if VehicleExecutor.GetMode(npc) == "Unresponsive" then
+		if not VehicleCommandFilter.IsWakePhrase(message) then
+			return
+		end
+		allowedActions = { transform_up = true }
+	end
+
 	lastRequestAt[player.UserId] = now
 
 	-- RequestAsync yields, so run off the chat-event thread.
 	task.spawn(function()
 		local history = ChatMemory.GetHistory(player)
-		local result = OpenRouterClient.RequestChat(message, history, buildContext(npc, "direct"))
+		local result = OpenRouterClient.RequestChat(message, history, buildContext(npc, "direct"), def.persona)
 
 		displayNpcReply(npc, result.reply)
-		dispatchAction(npc, player, result.action, result.complied, ActionConfig.CHAT_ACTIONS)
+		dispatchAction(npc, player, result.action, result.complied, allowedActions)
 
 		ChatMemory.AppendTurn(player, "user", message)
 		ChatMemory.AppendTurn(player, "assistant", result.reply)
@@ -278,16 +309,21 @@ function NpcChatController.SpeakSpontaneously(npc: Model)
 	-- before this self-initiated decision comes back. Without this check,
 	-- a late "I'll wander off" could silently cancel a fresh "follow me".
 	local generationAtRequest = ActionExecutor.GetGeneration(npc)
+	local def = NpcDefinitions.Get(npc)
 
-	local result =
-		OpenRouterClient.RequestChat(SELF_INITIATED_SENTINEL_MESSAGE, {}, buildContext(npc, "self_initiated"))
+	local result = OpenRouterClient.RequestChat(
+		SELF_INITIATED_SENTINEL_MESSAGE,
+		{},
+		buildContext(npc, "self_initiated"),
+		def.persona
+	)
 
 	if ActionExecutor.GetGeneration(npc) ~= generationAtRequest then
 		return
 	end
 
 	displayNpcReply(npc, result.reply)
-	dispatchAction(npc, nil, result.action, result.complied, ActionConfig.SELF_ACTIONS)
+	dispatchAction(npc, nil, result.action, result.complied, def.selfActions)
 end
 
 function NpcChatController.Start()

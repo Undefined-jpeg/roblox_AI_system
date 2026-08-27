@@ -77,4 +77,16 @@ Config.PASSIVE_RESPONSE_CHANCE = 0.35
 -- Cap on the "you notice: ..." surroundings text sent to the LLM.
 Config.MAX_SURROUNDINGS_CHARS = 300
 
+-- CollectionService tag applied to rideable vehicle NPCs, in addition to
+-- NPC_TAG. See VehicleExecutor.lua / NpcDefinitions.lua.
+Config.VEHICLE_TAG = SharedConfig.VEHICLE_TAG
+
+-- How often (seconds) a mounted vehicle's height-above-ground is checked
+-- and clamped back down to its configured flight ceiling.
+Config.VEHICLE_MOUNT_HEIGHT_CHECK_SECONDS = 1
+
+-- How often (seconds) a vehicle's "move" animation is checked and
+-- started/stopped to match whether it's currently moving.
+Config.VEHICLE_ANIM_POLL_SECONDS = 0.5
+
 return Config

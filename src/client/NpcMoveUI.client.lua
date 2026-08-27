@@ -15,6 +15,7 @@ local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
 
 local localPlayer = Players.LocalPlayer
 local moveEvent = Remotes.GetMoveNpcRequestEvent()
+local promptMoveClickEvent = Remotes.GetPromptMoveClickEvent()
 
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "NpcMoveUI"
@@ -41,6 +42,11 @@ promptLabel.Parent = screenGui
 
 local pointModeActive = false
 local nearbyNpc: Model? = nil
+-- Set when the AI itself (via a chat "move to" command) asks a specific
+-- player to point-move a specific NPC -- overrides proximity-based
+-- targeting and the MOVE_UI_RADIUS requirement entirely, since the player
+-- explicitly asked for this via chat regardless of how far away they are.
+local promptedNpc: Model? = nil
 
 local function findNearbyNpc(): Model?
 	local character = localPlayer.Character
@@ -72,7 +78,8 @@ local function sendMoveRequest(npc: Model, position: Vector3)
 end
 
 local function onWorldClick(inputPosition: Vector2)
-	if not pointModeActive or not nearbyNpc then
+	local targetNpc = promptedNpc or nearbyNpc
+	if not pointModeActive or not targetNpc then
 		return
 	end
 
@@ -85,18 +92,25 @@ local function onWorldClick(inputPosition: Vector2)
 
 	local result = Workspace:Raycast(ray.Origin, ray.Direction * 1000, raycastParams)
 	if result then
-		sendMoveRequest(nearbyNpc, result.Position)
+		sendMoveRequest(targetNpc, result.Position)
 	end
 
+	promptedNpc = nil
 	setPointMode(false)
 end
 
 button.MouseButton1Click:Connect(function()
 	if pointModeActive then
+		promptedNpc = nil
 		setPointMode(false)
 	elseif nearbyNpc then
 		setPointMode(true)
 	end
+end)
+
+promptMoveClickEvent.OnClientEvent:Connect(function(npc: Model)
+	promptedNpc = npc
+	setPointMode(true)
 end)
 
 UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
@@ -110,8 +124,8 @@ end)
 
 RunService.Heartbeat:Connect(function()
 	nearbyNpc = findNearbyNpc()
-	if not nearbyNpc and pointModeActive then
+	if not nearbyNpc and not promptedNpc and pointModeActive then
 		setPointMode(false)
 	end
-	button.Visible = nearbyNpc ~= nil
+	button.Visible = nearbyNpc ~= nil or pointModeActive
 end)

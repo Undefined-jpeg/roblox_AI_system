@@ -161,7 +161,7 @@ function ActionExecutor.Examine(npc: Model, durationSeconds: number)
 	end)
 end
 
-function ActionExecutor.FollowPlayer(npc: Model, player: Player)
+function ActionExecutor.FollowPlayer(npc: Model, player: Player, stopDistance: number?)
 	local state = getState(npc)
 	state.mode = "Following"
 	state.followTarget = player
@@ -169,7 +169,7 @@ function ActionExecutor.FollowPlayer(npc: Model, player: Player)
 	local myGeneration = state.generation
 
 	local RECOMPUTE_INTERVAL = 1.5
-	local STOP_DISTANCE = 6
+	local STOP_DISTANCE = stopDistance or 6
 
 	task.spawn(function()
 		while states[npc] and states[npc].generation == myGeneration do

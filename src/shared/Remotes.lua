@@ -8,6 +8,7 @@ local RunService = game:GetService("RunService")
 local FOLDER_NAME = "AiNpcRemotes"
 local MOVE_REQUEST_NAME = "MoveNpcRequest"
 local CHAT_MESSAGE_NAME = "DisplayNpcChatMessage"
+local PROMPT_MOVE_CLICK_NAME = "PromptMoveClick"
 
 local Remotes = {}
 
@@ -52,6 +53,14 @@ end
 -- client (confirmed against the live API) -- the server can't call it directly.
 function Remotes.GetDisplayNpcChatMessageEvent(): RemoteEvent
 	return getOrCreateRemoteEvent(CHAT_MESSAGE_NAME)
+end
+
+-- Server -> one client: "the AI just told you to move this NPC somewhere --
+-- go ahead and enter click-to-move mode for it now." Lets a chat-issued
+-- "move to" command reuse the existing click-to-move UI/validation instead
+-- of ever trusting LLM-supplied coordinates.
+function Remotes.GetPromptMoveClickEvent(): RemoteEvent
+	return getOrCreateRemoteEvent(PROMPT_MOVE_CLICK_NAME)
 end
 
 return Remotes

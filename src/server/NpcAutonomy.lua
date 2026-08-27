@@ -162,13 +162,16 @@ end
 
 function NpcAutonomy.Start()
 	for _, npc in ipairs(CollectionService:GetTagged(Config.NPC_TAG)) do
-		if npc:IsA("Model") then
+		-- Vehicle NPCs never wander/examine/self-initiate chatter -- they're
+		-- command-driven, and their movement/animation is owned by
+		-- VehicleExecutor instead.
+		if npc:IsA("Model") and not npc:HasTag(Config.VEHICLE_TAG) then
 			startLoopFor(npc)
 		end
 	end
 
 	CollectionService:GetInstanceAddedSignal(Config.NPC_TAG):Connect(function(npc)
-		if npc:IsA("Model") then
+		if npc:IsA("Model") and not npc:HasTag(Config.VEHICLE_TAG) then
 			startLoopFor(npc)
 		end
 	end)

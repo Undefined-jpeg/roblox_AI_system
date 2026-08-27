@@ -65,11 +65,16 @@ end
 -- Fires and forgets a POST to the proxy's /npc-chat endpoint. Never throws --
 -- returns a safe fallback result on any network/parse failure so the caller
 -- never has to worry about propagating an error into the chat.
-function OpenRouterClient.RequestChat(message: string, history: { ChatTurn }, context: NpcContext): ChatResult
+function OpenRouterClient.RequestChat(
+	message: string,
+	history: { ChatTurn },
+	context: NpcContext,
+	persona: string
+): ChatResult
 	local body = HttpService:JSONEncode({
 		message = message,
 		history = history,
-		persona = Config.NPC_PERSONA,
+		persona = persona,
 		context = context,
 	})
 

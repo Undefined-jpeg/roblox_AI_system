@@ -29,6 +29,26 @@ ActionConfig.PASSIVE_ACTIONS = {
 	play_emote = true,
 }
 
+-- Vehicle NPCs (e.g. Eight) have a completely different command set -- see
+-- NpcDefinitions.lua, which is what actually selects these whitelists at
+-- runtime instead of the three above. Empty SELF/PASSIVE tables are
+-- deliberate: a vehicle never self-initiates chatter or reacts to chat
+-- nobody addressed to it (NpcAutonomy and NpcChatController's passive-
+-- overhear path both exclude vehicle-tagged models entirely, upstream of
+-- these whitelists ever being consulted).
+ActionConfig.VEHICLE_CHAT_ACTIONS = {
+	follow_player = true,
+	move_to = true,
+	ride = true,
+	stop = true,
+	transform_up = true,
+	transform_back = true,
+}
+
+ActionConfig.VEHICLE_SELF_ACTIONS = {}
+
+ActionConfig.VEHICLE_PASSIVE_ACTIONS = {}
+
 -- Emote name -> Roblox default-character emote animation asset id.
 -- These are Roblox's standard built-in R15 emote animations, so no custom
 -- animation upload is required to use them. Swap in your own asset ids later
