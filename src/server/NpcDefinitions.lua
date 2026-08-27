@@ -29,10 +29,9 @@ export type NpcDef = {
 	vehicle: VehicleDef?,
 }
 
--- Placeholder persona -- write Eight's real personality here. Placeholder
--- animation ids are intentionally empty until published (see
--- proxy step in the vehicle setup docs); PlayAnim-style helpers warn and
--- no-op on an empty id rather than erroring.
+-- Placeholder persona -- write Eight's real personality here. Animation ids
+-- are published assets (see proxy/setup docs); PlayAnim-style helpers still
+-- warn-and-no-op gracefully if any of these ever go empty/invalid.
 local DEFINITIONS: { [string]: NpcDef } = {
 	Eight = {
 		persona = "You are Eight, a rideable robot. (Placeholder persona -- customize before shipping.)",
@@ -41,7 +40,11 @@ local DEFINITIONS: { [string]: NpcDef } = {
 		passiveActions = ActionConfig.VEHICLE_PASSIVE_ACTIONS,
 		vehicle = {
 			seatName = "Seat",
-			animations = { spawn = "", move = "", idle = "" },
+			animations = {
+				spawn = "rbxassetid://103389384347300",
+				move = "rbxassetid://136151754007256",
+				idle = "rbxassetid://134247433443735",
+			},
 			groundSpeed = 40,
 			flightSpeed = 55,
 			linearMaxForce = 50000,

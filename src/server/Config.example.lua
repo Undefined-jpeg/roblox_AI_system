@@ -21,9 +21,7 @@ Config.NPC_TAG = SharedConfig.NPC_TAG
 -- Placeholder persona -- replace with your NPC's real name/personality before shipping.
 -- Sent to the proxy on every request as the "persona" field (falls back to the
 -- proxy's own default if left blank).
-Config.NPC_PERSONA = "You are a friendly, upbeat NPC guide in a Roblox game. "
-	.. "You enjoy helping players and keeping the mood light. "
-	.. "(This is a placeholder persona -- customize it for your NPC.)"
+Config.NPC_PERSONA = "You are an Artificial Intelligence robot meant to assist players." .. "You speak monotonely."
 
 -- How close a player must be to the NPC for their chat to be picked up,
 -- if they didn't @mention the NPC by name.

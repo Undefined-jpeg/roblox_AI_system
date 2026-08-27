@@ -185,7 +185,12 @@ function VehicleExecutor.TransformUp(npc: Model)
 		local track = loadAnim(npc, def.animations.spawn)
 		if track then
 			track:Play()
-			track.Completed:Wait()
+			-- AnimationTrack has no "Completed" event (that's Tween-only) --
+			-- "Stopped" is what fires when a non-looped track finishes
+			-- playing, confirmed live. Using the wrong event name here threw
+			-- inside this task.spawn'd coroutine and silently killed it
+			-- before the idle animation below ever ran.
+			track.Stopped:Wait()
 		end
 
 		if not (states[npc] and states[npc].generation == myGeneration) then
@@ -193,6 +198,12 @@ function VehicleExecutor.TransformUp(npc: Model)
 		end
 
 		if def.animations.idle ~= "" then
+			-- Defensive: don't accumulate duplicate looped idle tracks if
+			-- TransformUp ever ends up triggered twice in close succession.
+			if states[npc].idleTrack then
+				states[npc].idleTrack:Stop()
+			end
+
 			local idleTrack = loadAnim(npc, def.animations.idle)
 			if idleTrack then
 				idleTrack.Looped = true
@@ -374,7 +385,13 @@ function VehicleExecutor.Init(npc: Model)
 	local alignOrientation = Instance.new("AlignOrientation")
 	alignOrientation.Name = "VehicleAlignOrientation"
 	alignOrientation.Attachment0 = attachment
-	alignOrientation.MaxTorque = math.huge
+	-- math.huge here (infinite corrective torque) caused visible wobbling,
+	-- confirmed live: on a heavy multi-part welded assembly, an "instantly
+	-- snap to goal" torque overcorrects every physics step and oscillates.
+	-- A large-but-finite torque plus a moderate (not max) Responsiveness
+	-- gives a stiff-but-stable hold instead.
+	alignOrientation.MaxTorque = 1e7
+	alignOrientation.Responsiveness = 25
 	-- No RelativeTo here -- that's a LinearVelocity-only property. With no
 	-- Attachment1 set, AlignOrientation.CFrame is already a world-space
 	-- orientation goal (confirmed live: setting RelativeTo on this class
