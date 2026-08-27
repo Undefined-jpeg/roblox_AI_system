@@ -7,7 +7,18 @@ const { getChatCompletion, FALLBACK_REPLY } = require("./lib/openrouter");
 const PORT = process.env.PORT || 3000;
 const SHARED_SECRET = process.env.SHARED_SECRET;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "anthropic/claude-haiku-4.5";
+// Accepts either a bare model slug ("google/gemini-2.5-flash-lite") or a
+// pasted-in model page URL ("https://openrouter.ai/google/gemini-2.5-flash-lite")
+// and normalizes to the slug OpenRouter's API actually expects -- pasting the
+// URL is an easy mistake (model pages are literally that URl) and otherwise
+// causes every single request to fail with a silent-looking fallback reply.
+function normalizeModelId(raw) {
+  const trimmed = raw.trim();
+  const prefix = "https://openrouter.ai/";
+  return trimmed.startsWith(prefix) ? trimmed.slice(prefix.length) : trimmed;
+}
+
+const OPENROUTER_MODEL = normalizeModelId(process.env.OPENROUTER_MODEL || "anthropic/claude-haiku-4.5");
 
 const MAX_MESSAGE_CHARS = 500;
 const MAX_HISTORY_TURNS = 6;
