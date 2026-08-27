@@ -375,7 +375,10 @@ function VehicleExecutor.Init(npc: Model)
 	alignOrientation.Name = "VehicleAlignOrientation"
 	alignOrientation.Attachment0 = attachment
 	alignOrientation.MaxTorque = math.huge
-	alignOrientation.RelativeTo = Enum.ActuatorRelativeTo.World
+	-- No RelativeTo here -- that's a LinearVelocity-only property. With no
+	-- Attachment1 set, AlignOrientation.CFrame is already a world-space
+	-- orientation goal (confirmed live: setting RelativeTo on this class
+	-- throws "not a valid member").
 	alignOrientation.CFrame = rootPart.CFrame
 	alignOrientation.Enabled = false
 	alignOrientation.Parent = rootPart

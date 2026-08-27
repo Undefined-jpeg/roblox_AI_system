@@ -288,14 +288,14 @@ local function handleChatted(player: Player, message: string)
 
 	-- RequestAsync yields, so run off the chat-event thread.
 	task.spawn(function()
-		local history = ChatMemory.GetHistory(player)
+		local history = ChatMemory.GetHistory(player, npc)
 		local result = OpenRouterClient.RequestChat(message, history, buildContext(npc, "direct"), def.persona)
 
 		displayNpcReply(npc, result.reply)
 		dispatchAction(npc, player, result.action, result.complied, allowedActions)
 
-		ChatMemory.AppendTurn(player, "user", message)
-		ChatMemory.AppendTurn(player, "assistant", result.reply)
+		ChatMemory.AppendTurn(player, npc, "user", message)
+		ChatMemory.AppendTurn(player, npc, "assistant", result.reply)
 	end)
 end
 
