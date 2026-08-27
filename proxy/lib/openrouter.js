@@ -1,4 +1,4 @@
-const { TOOLS, extractAction } = require("./actionSchema");
+const { TOOLS, TOOL_CHOICE, extractResponse } = require("./actionSchema");
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const REQUEST_TIMEOUT_MS = 8000;
@@ -10,8 +10,7 @@ function buildSystemPrompt(persona) {
   return (
     `${persona}\n\n` +
     "Keep replies short and conversational (1-3 sentences), suitable for a game chat window. " +
-    "You may optionally call one tool per reply if the player's request clearly calls for it. " +
-    "If you're not sure, just reply in chat without calling a tool."
+    "Set `action` to 'none' unless the player's request clearly calls for follow_player, play_emote, or stop."
   );
 }
 
@@ -45,7 +44,7 @@ async function getChatCompletion({ persona, message, history, model, apiKey }) {
         model,
         messages,
         tools: TOOLS,
-        tool_choice: "auto",
+        tool_choice: TOOL_CHOICE,
         max_tokens: 200,
         temperature: 0.7,
       }),
@@ -62,10 +61,9 @@ async function getChatCompletion({ persona, message, history, model, apiKey }) {
     const choice = data.choices && data.choices[0];
     const assistantMessage = choice && choice.message;
 
-    const replyText = (assistantMessage && assistantMessage.content) || "...";
-    const action = extractAction(assistantMessage);
+    const { reply, action } = extractResponse(assistantMessage);
 
-    return { reply: truncate(replyText, MAX_REPLY_CHARS), action };
+    return { reply: truncate(reply, MAX_REPLY_CHARS), action };
   } catch (err) {
     console.error("OpenRouter request failed:", err.message);
     return { reply: FALLBACK_REPLY, action: null };
