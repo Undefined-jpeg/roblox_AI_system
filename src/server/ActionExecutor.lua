@@ -36,6 +36,14 @@ function ActionExecutor.GetMode(npc: Model): string
 	return getState(npc).mode
 end
 
+-- Read-only accessor for detecting staleness: an async LLM call can capture
+-- this before making its request, then compare on return to tell whether
+-- something else (a player command, a newer autonomous decision) already
+-- changed the NPC's behavior while the call was in flight.
+function ActionExecutor.GetGeneration(npc: Model): number
+	return getState(npc).generation
+end
+
 local function getHumanoid(npc: Model): Humanoid?
 	return npc:FindFirstChildOfClass("Humanoid")
 end

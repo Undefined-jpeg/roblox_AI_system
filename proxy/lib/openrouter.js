@@ -42,7 +42,19 @@ const TURN_TYPE_SUFFIXES = {
 };
 
 function buildSystemPrompt(persona, rawContext) {
-  const context = { ...DEFAULT_CONTEXT, ...(rawContext || {}) };
+  // Merge field-by-field (not a blind spread) so a present-but-undefined
+  // field on rawContext can't silently clobber DEFAULT_CONTEXT's fallback --
+  // `{...DEFAULT_CONTEXT, ...{activity: undefined}}` would otherwise leave
+  // `activity` as literal `undefined`, rendering as "you are: undefined" in
+  // the prompt text.
+  const context = { ...DEFAULT_CONTEXT };
+  if (rawContext) {
+    for (const key of Object.keys(DEFAULT_CONTEXT)) {
+      if (rawContext[key] !== undefined) {
+        context[key] = rawContext[key];
+      }
+    }
+  }
   const suffix = TURN_TYPE_SUFFIXES[context.turnType] || TURN_TYPE_SUFFIXES.direct;
 
   return (

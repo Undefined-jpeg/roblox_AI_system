@@ -29,6 +29,39 @@ local FALLBACK_RESULT: ChatResult = {
 	complied = true,
 }
 
+-- HttpService:RequestAsync has no built-in per-call timeout, and a slow or
+-- hung proxy (e.g. Render cold-starting) can otherwise leave the calling
+-- coroutine waiting far longer than Config.HTTP_TIMEOUT_SECONDS. This races
+-- the real request against a plain wait: whichever finishes first "wins",
+-- and a late-arriving request result past the timeout is just ignored (the
+-- underlying HTTP call itself can't be cancelled, only stopped-waiting-on).
+local function requestWithTimeout(requestOptions: any, timeoutSeconds: number): (boolean, any)
+	local settled = false
+	local ok, result
+
+	task.spawn(function()
+		local requestOk, requestResult = pcall(function()
+			return HttpService:RequestAsync(requestOptions)
+		end)
+		if not settled then
+			settled = true
+			ok, result = requestOk, requestResult
+		end
+	end)
+
+	local elapsed = 0
+	while not settled and elapsed < timeoutSeconds do
+		task.wait(0.1)
+		elapsed += 0.1
+	end
+
+	if not settled then
+		return false, "timed out after " .. timeoutSeconds .. "s"
+	end
+
+	return ok, result
+end
+
 -- Fires and forgets a POST to the proxy's /npc-chat endpoint. Never throws --
 -- returns a safe fallback result on any network/parse failure so the caller
 -- never has to worry about propagating an error into the chat.
@@ -40,17 +73,15 @@ function OpenRouterClient.RequestChat(message: string, history: { ChatTurn }, co
 		context = context,
 	})
 
-	local ok, result = pcall(function()
-		return HttpService:RequestAsync({
-			Url = Config.PROXY_URL .. "/npc-chat",
-			Method = "POST",
-			Headers = {
-				["Content-Type"] = "application/json",
-				["X-Npc-Secret"] = Config.SHARED_SECRET,
-			},
-			Body = body,
-		})
-	end)
+	local ok, result = requestWithTimeout({
+		Url = Config.PROXY_URL .. "/npc-chat",
+		Method = "POST",
+		Headers = {
+			["Content-Type"] = "application/json",
+			["X-Npc-Secret"] = Config.SHARED_SECRET,
+		},
+		Body = body,
+	}, Config.HTTP_TIMEOUT_SECONDS)
 
 	if not ok then
 		warn("[OpenRouterClient] HTTP request failed: " .. tostring(result))

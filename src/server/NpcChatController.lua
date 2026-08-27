@@ -219,8 +219,18 @@ local function handlePassiveOverhear(player: Player, message: string)
 
 	lastPassiveReplyAt[npc] = now
 
+	-- Captured before the (yielding) proxy call so we can tell, on return,
+	-- whether something else -- most importantly a player's own direct
+	-- command -- has since changed what this NPC is doing. A stale
+	-- overheard reaction should never clobber a fresher, more important
+	-- state change.
+	local generationAtRequest = ActionExecutor.GetGeneration(npc)
+
 	task.spawn(function()
 		local result = OpenRouterClient.RequestChat(message, {}, buildContext(npc, "passive_overheard"))
+		if ActionExecutor.GetGeneration(npc) ~= generationAtRequest then
+			return
+		end
 		displayNpcReply(npc, result.reply)
 		dispatchAction(npc, player, result.action, result.complied, ActionConfig.PASSIVE_ACTIONS)
 		-- No ChatMemory write: this wasn't a real conversation with `player`.
@@ -262,8 +272,20 @@ end
 -- decides, unprompted, to say something. No player addressed it, so no
 -- ChatMemory write and a narrower action whitelist.
 function NpcChatController.SpeakSpontaneously(npc: Model)
+	-- Same staleness guard as handlePassiveOverhear: NpcAutonomy only calls
+	-- this while genuinely Idle, but the proxy round-trip yields, and a
+	-- player's direct command can arrive and change the NPC's behavior
+	-- before this self-initiated decision comes back. Without this check,
+	-- a late "I'll wander off" could silently cancel a fresh "follow me".
+	local generationAtRequest = ActionExecutor.GetGeneration(npc)
+
 	local result =
 		OpenRouterClient.RequestChat(SELF_INITIATED_SENTINEL_MESSAGE, {}, buildContext(npc, "self_initiated"))
+
+	if ActionExecutor.GetGeneration(npc) ~= generationAtRequest then
+		return
+	end
+
 	displayNpcReply(npc, result.reply)
 	dispatchAction(npc, nil, result.action, result.complied, ActionConfig.SELF_ACTIONS)
 end
