@@ -23,6 +23,8 @@ const OPENROUTER_MODEL = normalizeModelId(process.env.OPENROUTER_MODEL || "anthr
 const MAX_MESSAGE_CHARS = 500;
 const MAX_HISTORY_TURNS = 6;
 const MAX_HISTORY_CONTENT_CHARS = 500;
+const MAX_CONTEXT_FIELD_CHARS = 200;
+const VALID_TURN_TYPES = new Set(["direct", "passive_overheard", "self_initiated"]);
 
 // Default persona used when Roblox doesn't send one. Customize per-NPC by
 // having Roblox include a "persona" field in the request body instead.
@@ -75,10 +77,23 @@ function sanitizeHistory(rawHistory) {
     }));
 }
 
+function sanitizeContext(raw) {
+  if (!raw || typeof raw !== "object") return undefined;
+
+  const cap = (value) => (typeof value === "string" ? value.slice(0, MAX_CONTEXT_FIELD_CHARS) : undefined);
+
+  return {
+    turnType: VALID_TURN_TYPES.has(raw.turnType) ? raw.turnType : "direct",
+    activity: cap(raw.activity),
+    surroundings: cap(raw.surroundings),
+    nearbyPlayers: cap(raw.nearbyPlayers),
+  };
+}
+
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
 app.post("/npc-chat", requireSharedSecret, async (req, res) => {
-  const { message, history, persona } = req.body || {};
+  const { message, history, persona, context } = req.body || {};
 
   if (typeof message !== "string" || message.trim().length === 0) {
     return res.status(400).json({ error: "message is required" });
@@ -87,6 +102,7 @@ app.post("/npc-chat", requireSharedSecret, async (req, res) => {
   const trimmedMessage = message.slice(0, MAX_MESSAGE_CHARS);
   const safeHistory = sanitizeHistory(history);
   const safePersona = typeof persona === "string" && persona.length > 0 ? persona : DEFAULT_PERSONA;
+  const safeContext = sanitizeContext(context);
 
   try {
     const result = await getChatCompletion({
@@ -95,11 +111,12 @@ app.post("/npc-chat", requireSharedSecret, async (req, res) => {
       history: safeHistory,
       model: OPENROUTER_MODEL,
       apiKey: OPENROUTER_API_KEY,
+      context: safeContext,
     });
     return res.json(result);
   } catch (err) {
     console.error("Unhandled error in /npc-chat:", err);
-    return res.json({ reply: FALLBACK_REPLY, action: null });
+    return res.json({ reply: FALLBACK_REPLY, action: null, complied: true });
   }
 });
 

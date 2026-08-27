@@ -5,54 +5,17 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Workspace = game:GetService("Workspace")
 
 local Config = require(script.Parent.Config)
 local ActionExecutor = require(script.Parent.ActionExecutor)
+local GroundUtil = require(script.Parent.GroundUtil)
 local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
-
-local GROUND_CHECK_HEIGHT = 50
-local GROUND_CHECK_DEPTH = 100
-local GROUND_TOLERANCE_STUDS = 5
 
 -- userId -> last move-request timestamp (os.clock()), for per-player cooldown.
 local lastMoveRequestAt: { [number]: number } = {}
 
 local function getNpcRootPart(npc: Model): BasePart?
 	return npc.PrimaryPart or npc:FindFirstChild("HumanoidRootPart") :: BasePart?
-end
-
--- Re-derives the real ground position under the client's claimed click point,
--- rather than trusting the client's Y coordinate. Returns nil if there's no
--- walkable surface reasonably close to the claimed position (e.g. the client
--- claimed a point floating in the sky, or lied about the position entirely).
-local function resolveGroundPosition(claimedPosition: Vector3): Vector3?
-	local rayOrigin = claimedPosition + Vector3.new(0, GROUND_CHECK_HEIGHT, 0)
-	local rayDirection = Vector3.new(0, -GROUND_CHECK_DEPTH, 0)
-
-	-- Exclude player characters so the ground check can't be fooled by
-	-- ray-hitting a player's body instead of the actual floor beneath them.
-	local excludeList = {}
-	for _, plr in ipairs(Players:GetPlayers()) do
-		if plr.Character then
-			table.insert(excludeList, plr.Character)
-		end
-	end
-
-	local raycastParams = RaycastParams.new()
-	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-	raycastParams.FilterDescendantsInstances = excludeList
-
-	local result = Workspace:Raycast(rayOrigin, rayDirection, raycastParams)
-	if not result then
-		return nil
-	end
-
-	if math.abs(result.Position.Y - claimedPosition.Y) > GROUND_TOLERANCE_STUDS then
-		return nil
-	end
-
-	return result.Position
 end
 
 local function onMoveNpcRequest(player: Player, npc: Instance, claimedPosition: Vector3)
@@ -78,7 +41,7 @@ local function onMoveNpcRequest(player: Player, npc: Instance, claimedPosition: 
 		return
 	end
 
-	local groundPosition = resolveGroundPosition(claimedPosition)
+	local groundPosition = GroundUtil.ResolveGroundPosition(claimedPosition)
 	if not groundPosition then
 		warn(
 			("[NpcMoveHandler] Rejected move request from %s: no walkable surface near claimed position"):format(
@@ -105,4 +68,4 @@ moveEvent.OnServerEvent:Connect(onMoveNpcRequest)
 local function onPlayerRemoving(player: Player)
 	lastMoveRequestAt[player.UserId] = nil
 end
-game:GetService("Players").PlayerRemoving:Connect(onPlayerRemoving)
+Players.PlayerRemoving:Connect(onPlayerRemoving)

@@ -1,5 +1,9 @@
 -- Captures player chat near/@mentioning AI NPCs, calls the proxy, displays
 -- the reply in the real Roblox chat, and dispatches any whitelisted action.
+-- Also handles two turn types beyond direct addressed chat: passively
+-- overheard messages elsewhere in server chat (cheap-filtered, rate-limited,
+-- see PassiveChatFilter/NpcAutonomy) and self-initiated spontaneous comments
+-- (triggered by NpcAutonomy's idle tick, never by a player).
 --
 -- Input capture uses the legacy Player.Chatted event rather than the newer
 -- TextChatService message-received APIs: Chatted still fires reliably even
@@ -9,20 +13,32 @@
 
 local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TextChatService = game:GetService("TextChatService")
 
-local Config = require(script.Parent.Config)
 local ActionConfig = require(script.Parent.ActionConfig)
 local ActionExecutor = require(script.Parent.ActionExecutor)
 local ChatMemory = require(script.Parent.ChatMemory)
+local Config = require(script.Parent.Config)
+local GroundUtil = require(script.Parent.GroundUtil)
+local NpcPerception = require(script.Parent.NpcPerception)
 local OpenRouterClient = require(script.Parent.OpenRouterClient)
+local PassiveChatFilter = require(script.Parent.PassiveChatFilter)
+local Remotes = require(ReplicatedStorage:WaitForChild("Remotes"))
 
 local NpcChatController = {}
 
 local MAX_DISPLAYED_REPLY_CHARS = 300
+local SELF_INITIATED_SENTINEL_MESSAGE = "(quiet moment -- no one is talking to you right now)"
 
--- userId -> last request timestamp (os.clock()), for per-player cooldown.
+-- userId -> last request timestamp (os.clock()), for the per-player direct
+-- cooldown. Separate from lastPassiveReplyAt below, which is per-NPC.
 local lastRequestAt: { [number]: number } = {}
+-- Model -> last passive-reply timestamp (os.clock()). Per-NPC rather than
+-- per-player, since passive monitoring is about not spamming from one NPC's
+-- perspective across a whole server full of players, not about any single
+-- player's cooldown.
+local lastPassiveReplyAt: { [Model]: number } = {}
 
 local function sanitizeForChat(text: string): string
 	-- Strip characters that could be used to inject rich-text tags into the
@@ -69,41 +85,108 @@ local function findRespondingNpc(player: Player, message: string): Model?
 	return nearestNpc
 end
 
+-- Nearest tagged NPC within listenRadius, for passive overhearing (doesn't
+-- need an @mention -- just proximity to whoever spoke).
+local function findNearestNpcWithin(player: Player, radiusStuds: number): Model?
+	local character = player.Character
+	local playerRoot = character and character:FindFirstChild("HumanoidRootPart") :: BasePart?
+	if not playerRoot then
+		return nil
+	end
+
+	local nearestNpc: Model? = nil
+	local nearestDistance = math.huge
+
+	for _, npc in ipairs(CollectionService:GetTagged(Config.NPC_TAG)) do
+		if npc:IsA("Model") then
+			local npcRoot = getNpcRootPart(npc)
+			if npcRoot then
+				local distance = (playerRoot.Position - npcRoot.Position).Magnitude
+				if distance <= radiusStuds and distance < nearestDistance then
+					nearestDistance = distance
+					nearestNpc = npc
+				end
+			end
+		end
+	end
+
+	return nearestNpc
+end
+
+local chatMessageEvent = Remotes.GetDisplayNpcChatMessageEvent()
+
 local function displayNpcReply(npc: Model, replyText: string)
 	local safeText = sanitizeForChat(replyText)
 
-	local bubbleOk, bubbleErr = pcall(function()
-		TextChatService:DisplayBubble(npc, safeText)
-	end)
-	if not bubbleOk then
-		warn("[NpcChatController] DisplayBubble failed: " .. tostring(bubbleErr))
-	end
-
-	local generalChannel = TextChatService.TextChannels:FindFirstChild("RBXGeneral")
-	if generalChannel then
-		local channelOk, channelErr = pcall(function()
-			generalChannel:DisplaySystemMessage(("[%s]: %s"):format(npc.Name, safeText))
+	-- DisplayBubble requires a BasePart, not a Model -- passing the Model
+	-- itself fails with "partOrCharacter is not a legal character" (confirmed
+	-- against the live API).
+	local npcRoot = getNpcRootPart(npc)
+	if npcRoot then
+		local bubbleOk, bubbleErr = pcall(function()
+			TextChatService:DisplayBubble(npcRoot, safeText)
 		end)
-		if not channelOk then
-			warn("[NpcChatController] DisplaySystemMessage failed: " .. tostring(channelErr))
+		if not bubbleOk then
+			warn("[NpcChatController] DisplayBubble failed: " .. tostring(bubbleErr))
 		end
 	end
+
+	-- TextChannel:DisplaySystemMessage can only be called from the client
+	-- (confirmed against the live API), so tell every client to display it
+	-- locally rather than calling it here.
+	chatMessageEvent:FireAllClients(("[%s]: %s"):format(npc.Name, safeText))
 end
 
-local function dispatchAction(npc: Model, player: Player, action: { name: string, params: any }?)
+local function buildContext(npc: Model, turnType: string): OpenRouterClient.NpcContext
+	return {
+		turnType = turnType,
+		activity = NpcPerception.GetActivityLabel(npc),
+		surroundings = NpcPerception.GetSurroundingsText(npc),
+		nearbyPlayers = NpcPerception.GetNearbyPlayersText(npc),
+	}
+end
+
+-- player is nil for self-initiated turns (no one to follow/address).
+-- allowedActions narrows the whitelist per turn type: a bystander NPC
+-- (passive) or one talking to itself (self-initiated) can do less than one
+-- directly addressed by a player.
+local function dispatchAction(
+	npc: Model,
+	player: Player?,
+	action: { name: string, params: any }?,
+	complied: boolean,
+	allowedActions: { [string]: boolean }
+)
+	if complied == false then
+		return
+	end
+
 	if type(action) ~= "table" or type(action.name) ~= "string" then
 		return
 	end
 
-	if not ActionConfig.CHAT_ACTIONS[action.name] then
-		warn("[NpcChatController] Rejected non-whitelisted action: " .. tostring(action.name))
+	if not allowedActions[action.name] then
+		warn("[NpcChatController] Rejected action outside this turn's whitelist: " .. tostring(action.name))
 		return
 	end
 
 	if action.name == "follow_player" then
+		if not player then
+			return
+		end
 		ActionExecutor.FollowPlayer(npc, player)
+		NpcPerception.SetFollowTargetName(npc, player.DisplayName)
 	elseif action.name == "stop" then
 		ActionExecutor.Stop(npc)
+		NpcPerception.SetFollowTargetName(npc, nil)
+	elseif action.name == "wander" then
+		local npcRoot = getNpcRootPart(npc)
+		if npcRoot then
+			local target = GroundUtil.PickRandomPointNear(npcRoot.Position, Config.WANDER_RADIUS_STUDS)
+			if target then
+				ActionExecutor.Wander(npc, target)
+			end
+		end
 	elseif action.name == "play_emote" then
 		local emote = type(action.params) == "table" and action.params.emote
 		if type(emote) == "string" and ActionConfig.EMOTES[emote] then
@@ -114,6 +197,36 @@ local function dispatchAction(npc: Model, player: Player, action: { name: string
 	end
 end
 
+local function handlePassiveOverhear(player: Player, message: string)
+	if not PassiveChatFilter.ShouldConsider(message) then
+		return
+	end
+
+	local npc = findNearestNpcWithin(player, Config.PASSIVE_LISTEN_STUDS)
+	if not npc then
+		return
+	end
+
+	local now = os.clock()
+	local last = lastPassiveReplyAt[npc]
+	if last and (now - last) < Config.PASSIVE_CHAT_COOLDOWN_SECONDS then
+		return
+	end
+
+	if math.random() >= Config.PASSIVE_RESPONSE_CHANCE then
+		return
+	end
+
+	lastPassiveReplyAt[npc] = now
+
+	task.spawn(function()
+		local result = OpenRouterClient.RequestChat(message, {}, buildContext(npc, "passive_overheard"))
+		displayNpcReply(npc, result.reply)
+		dispatchAction(npc, player, result.action, result.complied, ActionConfig.PASSIVE_ACTIONS)
+		-- No ChatMemory write: this wasn't a real conversation with `player`.
+	end)
+end
+
 local function handleChatted(player: Player, message: string)
 	if type(message) ~= "string" or message == "" then
 		return
@@ -121,6 +234,7 @@ local function handleChatted(player: Player, message: string)
 
 	local npc = findRespondingNpc(player, message)
 	if not npc then
+		handlePassiveOverhear(player, message)
 		return
 	end
 
@@ -134,14 +248,24 @@ local function handleChatted(player: Player, message: string)
 	-- RequestAsync yields, so run off the chat-event thread.
 	task.spawn(function()
 		local history = ChatMemory.GetHistory(player)
-		local result = OpenRouterClient.RequestChat(message, history)
+		local result = OpenRouterClient.RequestChat(message, history, buildContext(npc, "direct"))
 
 		displayNpcReply(npc, result.reply)
-		dispatchAction(npc, player, result.action)
+		dispatchAction(npc, player, result.action, result.complied, ActionConfig.CHAT_ACTIONS)
 
 		ChatMemory.AppendTurn(player, "user", message)
 		ChatMemory.AppendTurn(player, "assistant", result.reply)
 	end)
+end
+
+-- Called by NpcAutonomy's idle tick (rate-limited there) when the NPC
+-- decides, unprompted, to say something. No player addressed it, so no
+-- ChatMemory write and a narrower action whitelist.
+function NpcChatController.SpeakSpontaneously(npc: Model)
+	local result =
+		OpenRouterClient.RequestChat(SELF_INITIATED_SENTINEL_MESSAGE, {}, buildContext(npc, "self_initiated"))
+	displayNpcReply(npc, result.reply)
+	dispatchAction(npc, nil, result.action, result.complied, ActionConfig.SELF_ACTIONS)
 end
 
 function NpcChatController.Start()

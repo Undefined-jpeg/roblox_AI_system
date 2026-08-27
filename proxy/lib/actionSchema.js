@@ -15,7 +15,7 @@
 // trusting LLM-generated coordinates. Keep ACTION_NAMES/EMOTE_NAMES in sync
 // with src/server/ActionConfig.lua.
 
-const ACTION_NAMES = ["none", "follow_player", "play_emote", "stop"];
+const ACTION_NAMES = ["none", "follow_player", "play_emote", "stop", "wander"];
 const EMOTE_NAMES = ["wave", "dance", "point", "laugh"];
 
 const RESPONSE_TOOL_NAME = "npc_response";
@@ -41,15 +41,22 @@ const TOOLS = [
               "An action to take alongside your reply, or 'none' if you're just talking. " +
               "'follow_player' starts following the player who's talking to you. " +
               "'play_emote' plays a short emote (requires setting `emote`). " +
-              "'stop' stops following and stands still.",
+              "'stop' stops following and stands still. " +
+              "'wander' walks off to a spot of your own choosing nearby.",
           },
           emote: {
             type: "string",
             enum: EMOTE_NAMES,
             description: "Required only when action is 'play_emote'.",
           },
+          complied: {
+            type: "boolean",
+            description:
+              "False if you are declining or pushing back on what was asked, instead of going along with it. " +
+              "When false, any `action` you set is ignored -- your `reply` text is what communicates the refusal.",
+          },
         },
-        required: ["reply", "action"],
+        required: ["reply", "action", "complied"],
       },
     },
   },
@@ -57,15 +64,15 @@ const TOOLS = [
 
 const TOOL_CHOICE = { type: "function", function: { name: RESPONSE_TOOL_NAME } };
 
-// Extracts { reply, action } from the forced npc_response tool call.
-// Returns a safe default if the model somehow didn't call it or sent
+// Extracts { reply, action, complied } from the forced npc_response tool
+// call. Returns a safe default if the model somehow didn't call it or sent
 // malformed arguments.
 function extractResponse(message) {
   const toolCalls = message && message.tool_calls;
   const call = Array.isArray(toolCalls) && toolCalls.find((c) => c.function && c.function.name === RESPONSE_TOOL_NAME);
 
   if (!call) {
-    return { reply: (message && message.content) || "...", action: null };
+    return { reply: (message && message.content) || "...", action: null, complied: true };
   }
 
   let args = {};
@@ -79,15 +86,23 @@ function extractResponse(message) {
   }
 
   const reply = typeof args.reply === "string" && args.reply.length > 0 ? args.reply : "...";
+  const complied = args.complied !== false;
 
   let action = null;
-  if (args.action === "follow_player" || args.action === "stop") {
+  if (args.action === "follow_player" || args.action === "stop" || args.action === "wander") {
     action = { name: args.action, params: {} };
   } else if (args.action === "play_emote" && EMOTE_NAMES.includes(args.emote)) {
     action = { name: "play_emote", params: { emote: args.emote } };
   }
 
-  return { reply, action };
+  // Defense-in-depth: a decline can never also execute the declined action,
+  // even if the model's own arguments were internally inconsistent (e.g. it
+  // somehow set complied=false but still filled in an action).
+  if (!complied) {
+    action = null;
+  }
+
+  return { reply, action, complied };
 }
 
 module.exports = { TOOLS, TOOL_CHOICE, EMOTE_NAMES, extractResponse };

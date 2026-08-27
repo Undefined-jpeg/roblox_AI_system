@@ -13,7 +13,7 @@ local ActionExecutor = {}
 -- coroutine from a previous behavior (e.g. an old Follow loop) knows to
 -- stop even if it's mid-wait when interrupted.
 type NpcState = {
-	mode: "Idle" | "Following" | "Moving",
+	mode: "Idle" | "Following" | "Moving" | "Wandering" | "Examining",
 	generation: number,
 	followTarget: Player?,
 }
@@ -27,6 +27,13 @@ local function getState(npc: Model): NpcState
 		states[npc] = state
 	end
 	return state
+end
+
+-- Read-only accessor so other modules (the autonomy tick, perception) can
+-- check what an NPC is currently doing without reaching into this module's
+-- private `states` table.
+function ActionExecutor.GetMode(npc: Model): string
+	return getState(npc).mode
 end
 
 local function getHumanoid(npc: Model): Humanoid?
@@ -105,6 +112,41 @@ function ActionExecutor.GotoPosition(npc: Model, targetPosition: Vector3)
 	task.spawn(function()
 		walkTo(npc, targetPosition, myGeneration)
 		-- If nothing superseded us, go back to idle when we arrive/give up.
+		if states[npc] and states[npc].generation == myGeneration then
+			states[npc].mode = "Idle"
+		end
+	end)
+end
+
+-- Identical to GotoPosition except for the mode label -- kept as a separate
+-- entry point so callers (and anything inspecting GetMode) can distinguish
+-- "the NPC decided to wander here on its own" from "a player clicked here".
+function ActionExecutor.Wander(npc: Model, targetPosition: Vector3)
+	local state = getState(npc)
+	state.mode = "Wandering"
+	state.followTarget = nil
+	state.generation += 1
+	local myGeneration = state.generation
+
+	task.spawn(function()
+		walkTo(npc, targetPosition, myGeneration)
+		if states[npc] and states[npc].generation == myGeneration then
+			states[npc].mode = "Idle"
+		end
+	end)
+end
+
+-- Pauses the NPC in place for a beat (e.g. while "looking at" something it's
+-- examining). Reverts to Idle afterward unless superseded mid-pause.
+function ActionExecutor.Examine(npc: Model, durationSeconds: number)
+	local state = getState(npc)
+	state.mode = "Examining"
+	state.followTarget = nil
+	state.generation += 1
+	local myGeneration = state.generation
+
+	task.spawn(function()
+		task.wait(durationSeconds)
 		if states[npc] and states[npc].generation == myGeneration then
 			states[npc].mode = "Idle"
 		end

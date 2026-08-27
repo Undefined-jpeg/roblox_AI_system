@@ -8,24 +8,36 @@ local Config = require(script.Parent.Config)
 local OpenRouterClient = {}
 
 export type ChatTurn = { role: string, content: string }
+export type NpcContext = {
+	turnType: "direct" | "passive_overheard" | "self_initiated",
+	activity: string,
+	surroundings: string,
+	nearbyPlayers: string,
+}
 export type ChatResult = {
 	reply: string,
 	action: { name: string, params: { [string]: any } }?,
+	complied: boolean,
 }
 
+-- A network failure isn't a personality choice -- always report compliant
+-- on the fallback so a dropped connection never surfaces as an in-character
+-- refusal.
 local FALLBACK_RESULT: ChatResult = {
 	reply = "Sorry, I can't think straight right now. Try again in a moment?",
 	action = nil,
+	complied = true,
 }
 
 -- Fires and forgets a POST to the proxy's /npc-chat endpoint. Never throws --
 -- returns a safe fallback result on any network/parse failure so the caller
 -- never has to worry about propagating an error into the chat.
-function OpenRouterClient.RequestChat(message: string, history: { ChatTurn }): ChatResult
+function OpenRouterClient.RequestChat(message: string, history: { ChatTurn }, context: NpcContext): ChatResult
 	local body = HttpService:JSONEncode({
 		message = message,
 		history = history,
 		persona = Config.NPC_PERSONA,
+		context = context,
 	})
 
 	local ok, result = pcall(function()
@@ -62,6 +74,7 @@ function OpenRouterClient.RequestChat(message: string, history: { ChatTurn }): C
 	return {
 		reply = decoded.reply,
 		action = decoded.action,
+		complied = decoded.complied ~= false,
 	}
 end
 

@@ -7,6 +7,7 @@ local RunService = game:GetService("RunService")
 
 local FOLDER_NAME = "AiNpcRemotes"
 local MOVE_REQUEST_NAME = "MoveNpcRequest"
+local CHAT_MESSAGE_NAME = "DisplayNpcChatMessage"
 
 local Remotes = {}
 
@@ -26,20 +27,31 @@ local function getOrCreateFolder()
 	return ReplicatedStorage:WaitForChild(FOLDER_NAME)
 end
 
-function Remotes.GetMoveNpcRequestEvent(): RemoteEvent
+local function getOrCreateRemoteEvent(name: string): RemoteEvent
 	local folder = getOrCreateFolder()
 
 	if RunService:IsServer() then
-		local event = folder:FindFirstChild(MOVE_REQUEST_NAME)
+		local event = folder:FindFirstChild(name)
 		if not event then
 			event = Instance.new("RemoteEvent")
-			event.Name = MOVE_REQUEST_NAME
+			event.Name = name
 			event.Parent = folder
 		end
 		return event
 	end
 
-	return folder:WaitForChild(MOVE_REQUEST_NAME)
+	return folder:WaitForChild(name)
+end
+
+function Remotes.GetMoveNpcRequestEvent(): RemoteEvent
+	return getOrCreateRemoteEvent(MOVE_REQUEST_NAME)
+end
+
+-- Server -> all clients: "please display this line in your local chat window."
+-- Exists because TextChannel:DisplaySystemMessage can only be called from the
+-- client (confirmed against the live API) -- the server can't call it directly.
+function Remotes.GetDisplayNpcChatMessageEvent(): RemoteEvent
+	return getOrCreateRemoteEvent(CHAT_MESSAGE_NAME)
 end
 
 return Remotes

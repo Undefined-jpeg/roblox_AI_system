@@ -43,4 +43,38 @@ Config.HTTP_TIMEOUT_SECONDS = 10
 Config.MAX_MOVE_DISTANCE_STUDS = 150
 Config.MOVE_COOLDOWN_SECONDS = 2
 
+-- Autonomous idle behavior (NpcAutonomy.lua). Every tick, while Idle, the
+-- NPC rolls WANDER_CHANCE to wander, EXAMINE_CHANCE to pause and examine a
+-- nearby part, and otherwise stays put -- all pure Luau, no LLM call.
+Config.AUTONOMY_TICK_MIN_SECONDS = 8
+Config.AUTONOMY_TICK_MAX_SECONDS = 15
+Config.WANDER_CHANCE = 0.45
+Config.EXAMINE_CHANCE = 0.35
+Config.WANDER_RADIUS_STUDS = 20
+Config.EXAMINE_RADIUS_STUDS = 20
+Config.EXAMINE_DURATION_SECONDS = 3
+
+-- Rate-limited spontaneous self-initiated comments -- the only recurring
+-- LLM cost from idle behavior. With these defaults, an always-idle NPC with
+-- a player nearby calls the proxy roughly once every ~7 minutes on average
+-- (interval floor / chance), never on every tick.
+Config.AUTONOMY_THOUGHT_INTERVAL_SECONDS = 150
+Config.AUTONOMY_THOUGHT_MIN_IDLE_SECONDS = 90
+Config.AUTONOMY_THOUGHT_CHANCE = 0.35
+
+-- How far the NPC "notices" players for context (name/display name feed
+-- into what it knows) and for deciding whether anyone's around to talk to.
+Config.NEARBY_PLAYERS_RADIUS_STUDS = 30
+
+-- Passive chat monitoring: messages NOT addressed to the NPC still pass
+-- through PassiveChatFilter.ShouldConsider (cheap local check) before any
+-- of this even applies, then must clear a per-NPC cooldown and a dice roll
+-- before actually spending a proxy call.
+Config.PASSIVE_LISTEN_STUDS = 25
+Config.PASSIVE_CHAT_COOLDOWN_SECONDS = 20
+Config.PASSIVE_RESPONSE_CHANCE = 0.35
+
+-- Cap on the "you notice: ..." surroundings text sent to the LLM.
+Config.MAX_SURROUNDINGS_CHARS = 300
+
 return Config
